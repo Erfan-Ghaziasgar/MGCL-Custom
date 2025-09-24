@@ -1,560 +1,253 @@
 from __future__ import absolute_import, division, print_function
 
-import pandas as pd
-import numpy as np
-from sklearn import preprocessing
 import argparse
-
-
-raw_sep = ','
-filter_min = 5
-sample_num = 100
-sample_pop = True
-
-parser = argparse.ArgumentParser()
-parser.add_argument('-x', default='Books', help='category')
-parser.add_argument('-y', default='Movies_and_TV', help='category')
-parser.add_argument('-z', default='CDs_and_Vinyl', help='category')
-
-args = parser.parse_args()
-raw_file = "amazon/ratings_" + args.x + ".csv"
-processed_file_prefix_x = "processed_data_all/" + args.x + "_"
-processed_file_prefix_y = "processed_data_all/" + args.y + "_"
-processed_file_prefix_z = "processed_data_all/" + args.z + "_"
-processed_file_prefix = "processed_data_all/" + args.x + args.y + args.z + "_"
-# ================================================================================
-# obtain implicit feedbacks
-df = pd.read_csv(raw_file, sep=raw_sep, header=None, names=['user_id','item_id','rating','timestamp'])
-df = df[['user_id','item_id','timestamp']]
-
-print("==== statistic of raw data ====")
-print("#users: %d" % len(df.user_id.unique()))
-print("#items: %d" % len(df.item_id.unique()))
-print("#actions: %d" % len(df))
-
-# ========================================================
-# sort by time
-df.sort_values(by=['timestamp'], kind='mergesort', ascending=True, inplace=True)
-
-# ========================================================
-# drop duplicated user-item pairs
-df.drop_duplicates(subset=['user_id','item_id'], keep='first', inplace=True)
-
-# ========================================================
-# discard cold-start items
-count_i = df.groupby('item_id').user_id.count()
-item_keep = count_i[count_i >= filter_min].index
-df = df[df['item_id'].isin(item_keep)]
-
-# discard cold-start users
-count_u = df.groupby('user_id').item_id.count()
-user_keep = count_u[count_u >= filter_min].index
-df = df[df['user_id'].isin(user_keep)]
-
-# output statistical information
-print("==== statistic of processed data (whole) ====")
-n = len(df.user_id.unique())
-m = len(df.item_id.unique())
-p = len(df)
-print("#users: %d" % n)
-print("#items: %d" % m)
-print("#actions: %d" % p)
-print("density: %.4f" % (p/n/m))
-
-count_u = df.groupby(['user_id']).item_id.count()
-print("min #actions per user: %.2f" % count_u.min())
-print("max #actions per user: %.2f" % count_u.max())
-print("ave #actions per user: %.2f" % count_u.mean())
-
-# ================================================================================
-# ================================================================================
-# ================================================================================
-# ================================================================================
-# ================================================================================
-
-raw_file = "amazon/ratings_" + args.y + ".csv"
-# ================================================================================
-# obtain implicit feedbacks
-df2 = pd.read_csv(raw_file, sep=raw_sep, header=None, names=['user_id','item_id','rating','timestamp'])
-df2 = df2[['user_id','item_id','timestamp']]
-
-# df = pd.concat([df, df2], keys=['x', 'y'], ignore_index=True)
-print("\n\n\n==== statistic of raw data ====")
-print("#users: %d" % len(df2.user_id.unique()))
-print("#items: %d" % len(df2.item_id.unique()))
-print("#actions: %d" % len(df2))
-
-# ========================================================
-# sort by time
-df2.sort_values(by=['timestamp'], kind='mergesort', ascending=True, inplace=True)
-
-# ========================================================
-# drop duplicated user-item pairs
-df2.drop_duplicates(subset=['user_id','item_id'], keep='first', inplace=True)
-
-# ========================================================
-# discard cold-start items
-count_i = df2.groupby('item_id').user_id.count()
-item_keep = count_i[count_i >= filter_min].index
-df2 = df2[df2['item_id'].isin(item_keep)]
-
-# discard cold-start users
-count_u = df2.groupby('user_id').item_id.count()
-user_keep = count_u[count_u >= filter_min].index
-df2 = df2[df2['user_id'].isin(user_keep)]
-
-# output statistical information
-print("==== statistic of processed data (whole) ====")
-n = len(df2.user_id.unique())
-m = len(df2.item_id.unique())
-p = len(df2)
-print("#users: %d" % n)
-print("#items: %d" % m)
-print("#actions: %d" % p)
-print("density: %.4f" % (p/n/m))
-
-count_u = df2.groupby(['user_id']).item_id.count()
-print("min #actions per user: %.2f" % count_u.min())
-print("max #actions per user: %.2f" % count_u.max())
-print("ave #actions per user: %.2f" % count_u.mean())
-
-
-# ================================================================================
-# ================================================================================
-# ================================================================================
-# ================================================================================
-# ================================================================================
-
-raw_file = "amazon/ratings_" + args.z + ".csv"
-# ================================================================================
-# obtain implicit feedbacks
-df3 = pd.read_csv(raw_file, sep=raw_sep, header=None, names=['user_id','item_id','rating','timestamp'])
-df3 = df3[['user_id','item_id','timestamp']]
-
-# df = pd.concat([df, df2], keys=['x', 'y'], ignore_index=True)
-print("\n\n\n==== statistic of raw data ====")
-print("#users: %d" % len(df3.user_id.unique()))
-print("#items: %d" % len(df3.item_id.unique()))
-print("#actions: %d" % len(df3))
-
-# ========================================================
-# sort by time
-df3.sort_values(by=['timestamp'], kind='mergesort', ascending=True, inplace=True)
-
-# ========================================================
-# drop duplicated user-item pairs
-df3.drop_duplicates(subset=['user_id','item_id'], keep='first', inplace=True)
-
-# ========================================================
-# discard cold-start items
-count_i = df3.groupby('item_id').user_id.count()
-item_keep = count_i[count_i >= filter_min].index
-df3 = df3[df3['item_id'].isin(item_keep)]
-
-# discard cold-start users
-count_u = df3.groupby('user_id').item_id.count()
-user_keep = count_u[count_u >= filter_min].index
-df3 = df3[df3['user_id'].isin(user_keep)]
-
-# output statistical information
-print("==== statistic of processed data (whole) ====")
-n = len(df3.user_id.unique())
-m = len(df3.item_id.unique())
-p = len(df3)
-print("#users: %d" % n)
-print("#items: %d" % m)
-print("#actions: %d" % p)
-print("density: %.4f" % (p/n/m))
-
-count_u = df3.groupby(['user_id']).item_id.count()
-print("min #actions per user: %.2f" % count_u.min())
-print("max #actions per user: %.2f" % count_u.max())
-print("ave #actions per user: %.2f" % count_u.mean())
-
-
-# ================================================================================
-# ================================================================================
-# ================================================================================
-# ================================================================================
-# ================================================================================
-
-user = pd.Series(list(set(df['user_id']).intersection(set(df2['user_id'])).intersection(set(df3['user_id']))))
-print("same user: ", len(user))
-items = pd.Series(list(set(df['item_id']).intersection(set(df2['item_id'])).intersection(set(df3['item_id']))))
-print("same items: ", len(items))
-print(items)
-
-df4 = pd.concat([df, df2, df3], keys=['x', 'y', 'z'])
-df4 = df4[df4['user_id'].isin(user)]
-
-# renumber user ids and item ids
-le = preprocessing.LabelEncoder()
-df4['user_id'] = le.fit_transform(df4['user_id'])+1
-df4['item_id'] = le.fit_transform(df4['item_id'])+1
-
-# output statistical information
-print("==== statistic of processed data (whole) ====")
-n = len(df4.user_id.unique())
-m = len(df4.item_id.unique())
-p = len(df4)
-print("#users: %d" % n)
-print("#items: %d" % m)
-print("#actions: %d" % p)
-print("density: %.4f" % (p/n/m))
-
-count_u = df4.groupby(['user_id']).item_id.count()
-print("min #actions per user: %.2f" % count_u.min())
-print("max #actions per user: %.2f" % count_u.max())
-print("ave #actions per user: %.2f" % count_u.mean())
-
-# ========================================================
-dfx = df4.loc['x']
-# output statistical information
-print("==== statistic of processed data (whole) ====")
-n = len(dfx.user_id.unique())
-m = len(dfx.item_id.unique())
-p = len(dfx)
-print("#users: %d" % n)
-print("#items: %d" % m)
-print("#actions: %d" % p)
-print("density: %.4f" % (p/n/m))
-
-count_u = dfx.groupby(['user_id']).item_id.count()
-print("min #actions per user: %.2f" % count_u.min())
-print("max #actions per user: %.2f" % count_u.max())
-print("ave #actions per user: %.2f" % count_u.mean())
-
-# split data into test set, valid set and train set,
-# adopting the leave-one-out evaluation for next-item recommendation task
-
-# ========================================
-# obtain possible records in test set
-df_test = dfx.groupby(['user_id']).tail(1)
-
-dfx.drop(df_test.index, axis='index', inplace=True)
-
-# ========================================
-# obtain possible records in valid set
-df_valid = dfx.groupby(['user_id']).tail(1)
-
-dfx.drop(df_valid.index, axis='index', inplace=True)
-
-# ========================================
-# drop cold-start items in valid set and test set
-df_valid = df_valid[df_valid.item_id.isin(dfx.item_id)]
-df_test = df_test[df_test.user_id.isin(df_valid.user_id) & (
-    df_test.item_id.isin(dfx.item_id) | df_test.item_id.isin(df_valid.item_id))]
-
-# output data file
-df_valid.to_csv(processed_file_prefix_x + "valid.csv", header=False, index=False)
-df_test.to_csv(processed_file_prefix_x + "test.csv", header=False, index=False)
-dfx.to_csv(processed_file_prefix_x + "train.csv", header=False, index=False)
-
-# output statistical information
-print("==== statistic of processed data (split) ====")
-print("#train_users: %d" % len(dfx.user_id.unique()))
-print("#train_items: %d" % len(dfx.item_id.unique()))
-print("#valid_users: %d" % len(df_valid.user_id.unique()))
-print("#test_users: %d" % len(df_test.user_id.unique()))
-
-# ========================================================
-# For each user, randomly sample some negative items,
-# and rank these items with the ground-truth item when testing or validation
-df_concat = pd.concat([dfx, df_valid, df_test], axis='index')
-sr_user2items = df_concat.groupby(['user_id']).item_id.unique()
-df_negative = pd.DataFrame({'user_id': df_concat.user_id.unique()})
-
-# ========================================
-# sample according to popularity
-if sample_pop == True:
-    sr_item2pop = df_concat.item_id.value_counts(sort=True, ascending=False)
-    arr_item = sr_item2pop.index.values
-    arr_pop = sr_item2pop.values
-
-    def get_negative_sample(pos):
-        neg_idx = ~np.in1d(arr_item, pos)
-        neg_item = arr_item[neg_idx]
-        neg_pop = arr_pop[neg_idx]
-        neg_pop = neg_pop / neg_pop.sum()
-
-        return np.random.choice(neg_item, size=sample_num, replace=False, p=neg_pop)
-
-    arr_sample = df_negative.user_id.apply(
-        lambda x: get_negative_sample(sr_user2items[x])).values
-
-# ========================================
-# sample uniformly
-else:
-    arr_item = df_concat.item_id.unique()
-    arr_sample = df_negative.user_id.apply(
-        lambda x: np.random.choice(
-            arr_item[~np.in1d(arr_item, sr_user2items[x])], size=sample_num, replace=False)).values
-
-# output negative data
-df_negative = pd.concat([df_negative, pd.DataFrame(list(arr_sample))], axis='columns')
-df_negative.to_csv(processed_file_prefix_x + "negative.csv", header=False, index=False)
-
-
-# ========================================
-# ========================================
-# ========================================
-# ========================================
-
-dfy = df4.loc['y']
-# output statistical information
-print("==== statistic of processed data (whole) ====")
-n = len(dfy.user_id.unique())
-m = len(dfy.item_id.unique())
-p = len(dfy)
-print("#users: %d" % n)
-print("#items: %d" % m)
-print("#actions: %d" % p)
-print("density: %.4f" % (p/n/m))
-
-count_u = dfy.groupby(['user_id']).item_id.count()
-print("min #actions per user: %.2f" % count_u.min())
-print("max #actions per user: %.2f" % count_u.max())
-print("ave #actions per user: %.2f" % count_u.mean())
-
-# split data into test set, valid set and train set,
-# adopting the leave-one-out evaluation for next-item recommendation task
-
-# ========================================
-# obtain possible records in test set
-df_test = dfy.groupby(['user_id']).tail(1)
-
-dfy.drop(df_test.index, axis='index', inplace=True)
-
-# ========================================
-# obtain possible records in valid set
-df_valid = dfy.groupby(['user_id']).tail(1)
-
-dfy.drop(df_valid.index, axis='index', inplace=True)
-
-# ========================================
-# drop cold-start items in valid set and test set
-df_valid = df_valid[df_valid.item_id.isin(dfy.item_id)]
-df_test = df_test[df_test.user_id.isin(df_valid.user_id) & (
-    df_test.item_id.isin(dfy.item_id) | df_test.item_id.isin(df_valid.item_id))]
-
-# output data file
-df_valid.to_csv(processed_file_prefix_y + "valid.csv", header=False, index=False)
-df_test.to_csv(processed_file_prefix_y + "test.csv", header=False, index=False)
-dfy.to_csv(processed_file_prefix_y + "train.csv", header=False, index=False)
-
-# output statistical information
-print("==== statistic of processed data (split) ====")
-print("#train_users: %d" % len(dfy.user_id.unique()))
-print("#train_items: %d" % len(dfy.item_id.unique()))
-print("#valid_users: %d" % len(df_valid.user_id.unique()))
-print("#test_users: %d" % len(df_test.user_id.unique()))
-
-# ========================================================
-# For each user, randomly sample some negative items,
-# and rank these items with the ground-truth item when testing or validation
-df_concat = pd.concat([dfy, df_valid, df_test], axis='index')
-sr_user2items = df_concat.groupby(['user_id']).item_id.unique()
-df_negative = pd.DataFrame({'user_id': df_concat.user_id.unique()})
-
-# ========================================
-# sample according to popularity
-if sample_pop == True:
-    sr_item2pop = df_concat.item_id.value_counts(sort=True, ascending=False)
-    arr_item = sr_item2pop.index.values
-    arr_pop = sr_item2pop.values
-
-    def get_negative_sample(pos):
-        neg_idx = ~np.in1d(arr_item, pos)
-        neg_item = arr_item[neg_idx]
-        neg_pop = arr_pop[neg_idx]
-        neg_pop = neg_pop / neg_pop.sum()
-
-        return np.random.choice(neg_item, size=sample_num, replace=False, p=neg_pop)
-
-    arr_sample = df_negative.user_id.apply(
-        lambda x: get_negative_sample(sr_user2items[x])).values
-
-# ========================================
-# sample uniformly
-else:
-    arr_item = df_concat.item_id.unique()
-    arr_sample = df_negative.user_id.apply(
-        lambda x: np.random.choice(
-            arr_item[~np.in1d(arr_item, sr_user2items[x])], size=sample_num, replace=False)).values
-
-# output negative data
-df_negative = pd.concat([df_negative, pd.DataFrame(list(arr_sample))], axis='columns')
-df_negative.to_csv(processed_file_prefix_y + "negative.csv", header=False, index=False)
-
-
-# ========================================
-# ========================================
-# ========================================
-# ========================================
-
-# ========================================================
-dfz = df4.loc['z']
-# output statistical information
-print("==== statistic of processed data (whole) ====")
-n = len(dfz.user_id.unique())
-m = len(dfz.item_id.unique())
-p = len(dfz)
-print("#users: %d" % n)
-print("#items: %d" % m)
-print("#actions: %d" % p)
-print("density: %.4f" % (p/n/m))
-
-count_u = dfz.groupby(['user_id']).item_id.count()
-print("min #actions per user: %.2f" % count_u.min())
-print("max #actions per user: %.2f" % count_u.max())
-print("ave #actions per user: %.2f" % count_u.mean())
-
-# split data into test set, valid set and train set,
-# adopting the leave-one-out evaluation for next-item recommendation task
-
-# ========================================
-# obtain possible records in test set
-df_test = dfz.groupby(['user_id']).tail(1)
-
-dfz.drop(df_test.index, axis='index', inplace=True)
-
-# ========================================
-# obtain possible records in valid set
-df_valid = dfz.groupby(['user_id']).tail(1)
-
-dfz.drop(df_valid.index, axis='index', inplace=True)
-
-# ========================================
-# drop cold-start items in valid set and test set
-df_valid = df_valid[df_valid.item_id.isin(dfz.item_id)]
-df_test = df_test[df_test.user_id.isin(df_valid.user_id) & (
-    df_test.item_id.isin(dfz.item_id) | df_test.item_id.isin(df_valid.item_id))]
-
-# output data file
-df_valid.to_csv(processed_file_prefix_z + "valid.csv", header=False, index=False)
-df_test.to_csv(processed_file_prefix_z + "test.csv", header=False, index=False)
-dfz.to_csv(processed_file_prefix_z + "train.csv", header=False, index=False)
-
-# output statistical information
-print("==== statistic of processed data (split) ====")
-print("#train_users: %d" % len(dfz.user_id.unique()))
-print("#train_items: %d" % len(dfz.item_id.unique()))
-print("#valid_users: %d" % len(df_valid.user_id.unique()))
-print("#test_users: %d" % len(df_test.user_id.unique()))
-
-# ========================================================
-# For each user, randomly sample some negative items,
-# and rank these items with the ground-truth item when testing or validation
-df_concat = pd.concat([dfz, df_valid, df_test], axis='index')
-sr_user2items = df_concat.groupby(['user_id']).item_id.unique()
-df_negative = pd.DataFrame({'user_id': df_concat.user_id.unique()})
-
-# ========================================
-# sample according to popularity
-if sample_pop == True:
-    sr_item2pop = df_concat.item_id.value_counts(sort=True, ascending=False)
-    arr_item = sr_item2pop.index.values
-    arr_pop = sr_item2pop.values
-
-    def get_negative_sample(pos):
-        neg_idx = ~np.in1d(arr_item, pos)
-        neg_item = arr_item[neg_idx]
-        neg_pop = arr_pop[neg_idx]
-        neg_pop = neg_pop / neg_pop.sum()
-
-        return np.random.choice(neg_item, size=sample_num, replace=False, p=neg_pop)
-
-    arr_sample = df_negative.user_id.apply(
-        lambda x: get_negative_sample(sr_user2items[x])).values
-
-# ========================================
-# sample uniformly
-else:
-    arr_item = df_concat.item_id.unique()
-    arr_sample = df_negative.user_id.apply(
-        lambda x: np.random.choice(
-            arr_item[~np.in1d(arr_item, sr_user2items[x])], size=sample_num, replace=False)).values
-
-# output negative data
-df_negative = pd.concat([df_negative, pd.DataFrame(list(arr_sample))], axis='columns')
-df_negative.to_csv(processed_file_prefix_z + "negative.csv", header=False, index=False)
-
-
-# ========================================
-# ========================================
-# ========================================
-# ========================================
-
-# split data into test set, valid set and train set,
-# adopting the leave-one-out evaluation for next-item recommendation task
-
-# ========================================
-# obtain possible records in test set
-df_test = df4.groupby(['user_id']).tail(1)
-
-df4.drop(df_test.index, axis='index', inplace=True)
-
-# ========================================
-# obtain possible records in valid set
-df_valid = df4.groupby(['user_id']).tail(1)
-
-df4.drop(df_valid.index, axis='index', inplace=True)
-
-# ========================================
-# drop cold-start items in valid set and test set
-df_valid = df_valid[df_valid.item_id.isin(df4.item_id)]
-df_test = df_test[df_test.user_id.isin(df_valid.user_id) & (
-    df_test.item_id.isin(df4.item_id) | df_test.item_id.isin(df_valid.item_id))]
-
-# output data file  TODO
-# df_valid.to_csv(processed_file_prefix + args.y + "valid.csv", header=False, index=False)
-# df_test.to_csv(processed_file_prefix + args.y + "test.csv", header=False, index=False)
-# df4.to_csv(processed_file_prefix + args.y + "train.csv", header=False, index=False)
-
-# output statistical information
-print("==== statistic of processed data (split) ====")
-print("#train_users: %d" % len(df4.user_id.unique()))
-print("#train_items: %d" % len(df4.item_id.unique()))
-print("#valid_users: %d" % len(df_valid.user_id.unique()))
-print("#test_users: %d" % len(df_test.user_id.unique()))
-
-
-# ========================================================
-# For each user, randomly sample some negative items,
-# and rank these items with the ground-truth item when testing or validation
-df_concat = pd.concat([df4, df_valid, df_test], axis='index')
-sr_user2items = df_concat.groupby(['user_id']).item_id.unique()
-df_negative = pd.DataFrame({'user_id': df_concat.user_id.unique()})
-
-# ========================================
-# sample according to popularity
-if sample_pop == True:
-    sr_item2pop = df_concat.item_id.value_counts(sort=True, ascending=False)
-    arr_item = sr_item2pop.index.values
-    arr_pop = sr_item2pop.values
-
-    def get_negative_sample(pos):
-        neg_idx = ~np.in1d(arr_item, pos)
-        neg_item = arr_item[neg_idx]
-        neg_pop = arr_pop[neg_idx]
-        neg_pop = neg_pop / neg_pop.sum()
-
-        return np.random.choice(neg_item, size=sample_num, replace=False, p=neg_pop)
-
-    arr_sample = df_negative.user_id.apply(
-        lambda x: get_negative_sample(sr_user2items[x])).values
-
-# ========================================
-# sample uniformly
-else:
-    arr_item = df_concat.item_id.unique()
-    arr_sample = df_negative.user_id.apply(
-        lambda x: np.random.choice(
-            arr_item[~np.in1d(arr_item, sr_user2items[x])], size=sample_num, replace=False)).values
-
-# output negative data  TODO
-df_negative = pd.concat([df_negative, pd.DataFrame(list(arr_sample))], axis='columns')
-# df_negative.to_csv(processed_file_prefix + args.y + "negative.csv", header=False, index=False)
-
-
-
+import os
+import json
+import numpy as np
+import pandas as pd
+from sklearn import preprocessing
+from tqdm import tqdm
+
+import warnings
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+tqdm.pandas()  # enable df.progress_apply
+
+# ----------------------------
+# Defaults
+# ----------------------------
+FILTER_MIN = 5
+SAMPLE_NUM = 100
+SAMPLE_POP = True
+RANDOM_SEED = 42
+
+
+# -------------------------------------------------
+# Loader
+# -------------------------------------------------
+def load_interactions(path: str) -> pd.DataFrame:
+    """
+    Reads a plain CSV with NO header in the order:
+        item_id, user_id, rating, timestamp
+    Returns: user_id, item_id, timestamp
+    """
+    df = pd.read_csv(
+        path,
+        header=None,
+        names=["item_id", "user_id", "rating", "timestamp"],
+        usecols=[0, 1, 2, 3],
+        dtype={0: "string", 1: "string", 2: "float32", 3: "int64"},
+        low_memory=False,
+    )
+    return df[["user_id", "item_id", "timestamp"]].copy()
+
+
+# -------------------------------------------------
+# Preprocessing functions
+# -------------------------------------------------
+def basic_cleanup(df: pd.DataFrame, filter_min: int) -> pd.DataFrame:
+    print("Sorting by timestamp...")
+    df = df.sort_values(by=["timestamp"], kind="mergesort", ascending=True)
+
+    print("Dropping duplicates...")
+    df = df.drop_duplicates(subset=["user_id", "item_id"], keep="first")
+
+    print("Filtering cold-start items...")
+    item_counts = df.groupby("item_id").user_id.count()
+    keep_items = item_counts[item_counts >= filter_min].index
+    df = df[df["item_id"].isin(keep_items)]
+
+    print("Filtering cold-start users...")
+    user_counts = df.groupby("user_id").item_id.count()
+    keep_users = user_counts[user_counts >= filter_min].index
+    df = df[df["user_id"].isin(keep_users)]
+
+    return df
+
+
+def print_whole_stats(title: str, df: pd.DataFrame) -> None:
+    print(f"\n==== {title} ====")
+    n = df.user_id.nunique()
+    m = df.item_id.nunique()
+    p = len(df)
+    density = (p / (n * m)) if (n > 0 and m > 0) else 0.0
+    print(f"#users: {n}")
+    print(f"#items: {m}")
+    print(f"#actions: {p}")
+    print(f"density: {density:.6f}")
+    cnt = df.groupby("user_id").item_id.count()
+    if len(cnt) > 0:
+        print(f"min #actions per user: {cnt.min():.2f}")
+        print(f"max #actions per user: {cnt.max():.2f}")
+        print(f"ave #actions per user: {cnt.mean():.2f}")
+
+
+def leave_one_out_split(df: pd.DataFrame):
+    print("Splitting into train/valid/test with leave-one-out...")
+    df_test = df.groupby("user_id").tail(1)
+    df_train_valid = df.drop(df_test.index, axis="index")
+
+    df_valid = df_train_valid.groupby("user_id").tail(1)
+    df_train = df_train_valid.drop(df_valid.index, axis="index")
+
+    df_valid = df_valid[df_valid.item_id.isin(df_train.item_id)]
+    df_test = df_test[
+        df_test.user_id.isin(df_valid.user_id)
+        & (df_test.item_id.isin(df_train.item_id) | df_test.item_id.isin(df_valid.item_id))
+    ]
+    return df_train, df_valid, df_test
+
+
+def sample_negatives(df_train, df_valid, df_test, sample_num, by_popularity, rng):
+    print("Sampling negatives...")
+    df_concat = pd.concat([df_train, df_valid, df_test], axis="index", ignore_index=True)
+    sr_user2items = df_concat.groupby("user_id").item_id.unique()
+    df_negative = pd.DataFrame({"user_id": df_concat.user_id.unique()})
+
+    if by_popularity:
+        sr_item2pop = df_concat.item_id.value_counts(sort=True, ascending=False)
+        arr_item = sr_item2pop.index.values
+        arr_pop = sr_item2pop.values.astype(float)
+        arr_pop = arr_pop / arr_pop.sum()
+
+        def get_negative_sample(pos):
+            neg_mask = ~np.in1d(arr_item, pos)
+            neg_items = arr_item[neg_mask]
+            neg_probs = arr_pop[neg_mask]
+            neg_probs = neg_probs / neg_probs.sum()
+            return rng.choice(neg_items, size=sample_num, replace=False, p=neg_probs)
+
+    else:
+        arr_item = df_concat.item_id.unique()
+
+        def get_negative_sample(pos):
+            candidate = arr_item[~np.in1d(arr_item, pos)]
+            return rng.choice(candidate, size=sample_num, replace=False)
+
+    arr_sample = tqdm(df_negative.user_id, desc="Negative sampling").progress_apply(
+        lambda u: get_negative_sample(sr_user2items[u])
+    ).values
+    df_negative = pd.concat([df_negative, pd.DataFrame(list(arr_sample))], axis="columns")
+    return df_negative
+
+
+def ensure_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+
+
+def save_splits(prefix, train, valid, test, negative):
+    ensure_dir(os.path.dirname(prefix))
+    train.to_csv(prefix + "train.csv", header=False, index=False)
+    valid.to_csv(prefix + "valid.csv", header=False, index=False)
+    test.to_csv(prefix + "test.csv", header=False, index=False)
+    negative.to_csv(prefix + "negative.csv", header=False, index=False)
+
+
+# -------------------------------------------------
+# Main
+# -------------------------------------------------
+def main():
+    parser = argparse.ArgumentParser(description="Preprocess two Amazon domains for MGCL-style experiments.")
+    parser.add_argument("--x_path", type=str, default="amazon/Clothing_Shoes_and_Jewelry.csv")
+    parser.add_argument("--y_path", type=str, default="amazon/Sports_and_Outdoors.csv")
+    parser.add_argument("--x_name", type=str, default="Clothing_Shoes_and_Jewelry")
+    parser.add_argument("--y_name", type=str, default="Sports_and_Outdoors")
+    parser.add_argument("--out_dir", type=str, default="processed_data_all")
+    parser.add_argument("--filter_min", type=int, default=FILTER_MIN)
+    parser.add_argument("--sample_num", type=int, default=SAMPLE_NUM)
+    parser.add_argument("--sample_pop", action="store_true", default=SAMPLE_POP)
+    parser.add_argument("--seed", type=int, default=RANDOM_SEED)
+    args = parser.parse_args()
+
+    rng = np.random.default_rng(args.seed)
+
+    # Load both domains
+    print("Loading domain X:", args.x_path)
+    dfx_raw = load_interactions(args.x_path)
+    print("Loading domain Y:", args.y_path)
+    dfy_raw = load_interactions(args.y_path)
+
+    print("\n==== statistic of raw data (X) ====")
+    print(f"#users: {dfx_raw.user_id.nunique()}")
+    print(f"#items: {dfx_raw.item_id.nunique()}")
+    print(f"#actions: {len(dfx_raw)}")
+
+    print("\n==== statistic of raw data (Y) ====")
+    print(f"#users: {dfy_raw.user_id.nunique()}")
+    print(f"#items: {dfy_raw.item_id.nunique()}")
+    print(f"#actions: {len(dfy_raw)}")
+
+    # Basic cleanup
+    dfx = basic_cleanup(dfx_raw, args.filter_min)
+    dfy = basic_cleanup(dfy_raw, args.filter_min)
+
+    print_whole_stats("processed data (X)", dfx)
+    print_whole_stats("processed data (Y)", dfy)
+
+    # Keep only users in BOTH domains
+    common_users = sorted(set(dfx.user_id.unique()).intersection(set(dfy.user_id.unique())))
+    print(f"\nCommon users across X and Y: {len(common_users)}")
+    dfx = dfx[dfx.user_id.isin(common_users)].copy()
+    dfy = dfy[dfy.user_id.isin(common_users)].copy()
+
+    # Global re-numbering of IDs
+    df_both = pd.concat([dfx.assign(domain="x"), dfy.assign(domain="y")], ignore_index=True)
+    user_le = preprocessing.LabelEncoder()
+    item_le = preprocessing.LabelEncoder()
+    df_both["user_id"] = user_le.fit_transform(df_both["user_id"]) + 1
+    df_both["item_id"] = item_le.fit_transform(df_both["item_id"]) + 1
+
+    # Split back by domain
+    dfx = df_both[df_both["domain"] == "x"][["user_id", "item_id", "timestamp"]].copy()
+    dfy = df_both[df_both["domain"] == "y"][["user_id", "item_id", "timestamp"]].copy()
+
+    dfx = dfx.sort_values(by=["user_id", "timestamp"], kind="mergesort")
+    dfy = dfy.sort_values(by=["user_id", "timestamp"], kind="mergesort")
+
+    print_whole_stats("after user intersection (X)", dfx)
+    print_whole_stats("after user intersection (Y)", dfy)
+
+    # Leave-one-out splits
+    x_train, x_valid, x_test = leave_one_out_split(dfx)
+    y_train, y_valid, y_test = leave_one_out_split(dfy)
+
+    # Negatives
+    x_neg = sample_negatives(x_train, x_valid, x_test, args.sample_num, args.sample_pop, rng)
+    y_neg = sample_negatives(y_train, y_valid, y_test, args.sample_num, args.sample_pop, rng)
+
+    # Save
+    x_prefix = os.path.join(args.out_dir, f"{args.x_name}_")
+    y_prefix = os.path.join(args.out_dir, f"{args.y_name}_")
+    save_splits(x_prefix, x_train, x_valid, x_test, x_neg)
+    save_splits(y_prefix, y_train, y_valid, y_test, y_neg)
+
+    print("\n==== split stats (X) ====")
+    print(f"#train_users: {x_train.user_id.nunique()}")
+    print(f"#train_items: {x_train.item_id.nunique()}")
+    print(f"#valid_users: {x_valid.user_id.nunique()}")
+    print(f"#test_users:  {x_test.user_id.nunique()}")
+
+    print("\n==== split stats (Y) ====")
+    print(f"#train_users: {y_train.user_id.nunique()}")
+    print(f"#train_items: {y_train.item_id.nunique()}")
+    print(f"#valid_users: {y_valid.user_id.nunique()}")
+    print(f"#test_users:  {y_test.user_id.nunique()}")
+
+    ensure_dir(args.out_dir)
+    with open(os.path.join(args.out_dir, "id_map.json"), "w") as f:
+        json.dump(
+            {
+                "num_users": int(df_both.user_id.nunique()),
+                "num_items_global": int(df_both.item_id.nunique()),
+                "domains": [args.x_name, args.y_name],
+                "notes": "IDs are label-encoded globally across both domains.",
+            },
+            f,
+            indent=2,
+        )
+
+    print("\nDone. Outputs written under:", args.out_dir)
+
+
+if __name__ == "__main__":
+    main()
