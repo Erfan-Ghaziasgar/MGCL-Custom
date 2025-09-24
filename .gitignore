@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+data/
+cross_data/
+*.pkl
+*.json.gz
+*.npy
+*.pt
+*.pth
+checkpoints/
+outputs/
+logs/
+runs/
+wandb/
+tensorboard/
