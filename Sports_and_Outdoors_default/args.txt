@@ -1,6 +1,7 @@
 alpha,0.5
-batch_size,128
+batch_size,256
 beta,0.5
+ckpt_dir,/content/drive/MyDrive/mgcl_checkpoints/Sports_and_Outdoors_default
 device,cuda
 dropout_rate,0.5
 gamma,0.5
@@ -12,7 +13,9 @@ maxlen,20
 num_blocks,2
 num_epochs,500
 num_heads,1
+resume,True
+save_every,1
 source_domain,Clothing_Shoes_and_Jewelry
-state_dict_path,None
+state_dict_path,/content/drive/MyDrive/mgcl_checkpoints/Sports_and_Outdoors_default/best.ckpt
 target_domain,Sports_and_Outdoors
 train_dir,default

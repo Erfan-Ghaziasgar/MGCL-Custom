@@ -105,7 +105,7 @@ def try_load_explicit(model, optimizer):
 
     path = args.state_dict_path
     try:
-        state = torch.load(path, map_location=torch.device(args.device))
+        state = torch.load(path, map_location=torch.device(args.device), weights_only=False)
         # New ckpt format
         if isinstance(state, dict) and 'model_state' in state:
             model.load_state_dict(state['model_state'])
@@ -157,7 +157,7 @@ def try_autoresume(model, optimizer):
     if not os.path.isfile(last):
         return 1, -1.0, 0.0, False
     try:
-        state = torch.load(last, map_location=torch.device(args.device))
+        state = torch.load(last, map_location=torch.device(args.device), weights_only=False)
         model.load_state_dict(state['model_state'])
         if optimizer is not None and 'optimizer_state' in state:
             optimizer.load_state_dict(state['optimizer_state'])
