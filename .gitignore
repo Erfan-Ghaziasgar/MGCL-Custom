@@ -9,6 +9,7 @@ cross_data/processed_data_all/*
 *.npy
 *.pt
 *.pth
+*.csv
 checkpoints/
 outputs/
 logs/
