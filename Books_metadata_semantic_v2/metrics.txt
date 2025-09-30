@@ -1,0 +1,7 @@
+Epoch   1 | Time: 39.89s | Valid (NDCG@10: 0.00000, HR@10: 0.00000) | Test (NDCG@10: 0.00000, HR@10: 0.00000)
+Epoch   1 | Time: 39.88s | Valid (NDCG@10: 0.05641, HR@10: 0.12005) | Test (NDCG@10: 0.05701, HR@10: 0.11950)
+Epoch  10 | Time: 37.70s | Valid (NDCG@10: 0.04529, HR@10: 0.09955) | Test (NDCG@10: 0.04588, HR@10: 0.10266)
+Epoch  20 | Time: 37.86s | Valid (NDCG@10: 0.04830, HR@10: 0.10477) | Test (NDCG@10: 0.04996, HR@10: 0.10632)
+Epoch  10 | Time: 43.53s | Valid (NDCG@10: 0.05234, HR@10: 0.10870) | Test (NDCG@10: 0.05365, HR@10: 0.11364)
+Epoch   5 | Time: 37.70s | Valid (NDCG@10: 0.04625, HR@10: 0.09937) | Test (NDCG@10: 0.04802, HR@10: 0.10394)
+Epoch   5 | Time: 38.71s | Valid (NDCG@10: 0.04210, HR@10: 0.09086) | Test (NDCG@10: 0.04235, HR@10: 0.09315)
