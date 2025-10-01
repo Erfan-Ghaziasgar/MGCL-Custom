@@ -67,6 +67,10 @@ class SASRec(torch.nn.Module):
                 torch.nn.Linear(args.hidden_units * 2, args.hidden_units),
                 torch.nn.Sigmoid()
             )
+            self.contextual_fusion_gate = torch.nn.Sequential(
+                torch.nn.Linear(args.hidden_units * 3, args.hidden_units),
+                torch.nn.Sigmoid()
+            )
             self.item_id_to_idx = item_id_to_idx               # ORIGINAL item_id -> row in text table
             self.reindexed_to_original = reindexed_to_original # REINDEX -> ORIGINAL item_id
             print("Text embeddings initialized successfully. Using fusion mechanism.")
@@ -165,10 +169,18 @@ class SASRec(torch.nn.Module):
         proj_text = self._text_embed_project(row_idx, for_contrastive)  # (N, H)
         return proj_text.view(*item_indices.shape, -1)
 
-    def fuse_id_text_embeddings(self, id_emb, text_emb):
+    def fuse_id_text_embeddings(self, id_emb, text_emb, context=None):
         if not self.use_text_features:
             return id_emb
-        gate = self.fusion_gate(torch.cat([id_emb, text_emb], dim=-1))
+        if context is not None:
+            if context.dim() < id_emb.dim():
+                for _ in range(id_emb.dim() - context.dim()):
+                    context = context.unsqueeze(1)
+            context = context.expand(id_emb.shape)
+            gate_input = torch.cat([id_emb, text_emb, context], dim=-1)
+            gate = self.contextual_fusion_gate(gate_input)
+        else:
+            gate = self.fusion_gate(torch.cat([id_emb, text_emb], dim=-1))
         return gate * id_emb + (1.0 - gate) * text_emb
 
     # -----------------
@@ -203,7 +215,8 @@ class SASRec(torch.nn.Module):
 
         if self.use_text_features:
             text_emb1 = self.get_text_embedding_lookup(log_seqs1_t)
-            seqs1 = self.fuse_id_text_embeddings(seqs1, text_emb1)
+            user_ctx = self.user_emb(user_ids_t).unsqueeze(1).expand_as(seqs1)
+            seqs1 = self.fuse_id_text_embeddings(seqs1, text_emb1, context=user_ctx)
 
         # position + dropout + mask
         H = self.item_emb.embedding_dim
@@ -231,7 +244,8 @@ class SASRec(torch.nn.Module):
 
         if self.use_text_features:
             text_emb2 = self.get_text_embedding_lookup(log_seqs2_t)
-            seqs2 = self.fuse_id_text_embeddings(seqs2, text_emb2)
+            user_ctx2 = self.user_emb(user_ids_t).unsqueeze(1).expand_as(seqs2)
+            seqs2 = self.fuse_id_text_embeddings(seqs2, text_emb2, context=user_ctx2)
 
         seqs2 = seqs2 * (H ** 0.5)
         seqs2 = self.emb_dropout(seqs2 + self.pos_emb(positions))
@@ -290,8 +304,8 @@ class SASRec(torch.nn.Module):
         if self.use_text_features:
             pos_text = self.get_text_embedding_lookup(torch.as_tensor(pos_seqs, device=self.dev))
             neg_text = self.get_text_embedding_lookup(torch.as_tensor(neg_seqs, device=self.dev))
-            pos_embs = self.fuse_id_text_embeddings(pos_embs, pos_text)
-            neg_embs = self.fuse_id_text_embeddings(neg_embs, neg_text)
+            pos_embs = self.fuse_id_text_embeddings(pos_embs, pos_text, context=log_feats)
+            neg_embs = self.fuse_id_text_embeddings(neg_embs, neg_text, context=log_feats)
 
         pos_logits = (log_feats * pos_embs).sum(dim=-1)
         neg_logits = (log_feats * neg_embs).sum(dim=-1)
@@ -316,8 +330,18 @@ class SASRec(torch.nn.Module):
         final_feat = log_feats[:, -1, :]
         item_embs = self.item_emb(torch.as_tensor(item_indices, dtype=torch.long, device=self.dev))
         if self.use_text_features:
-            text_embs = self.get_text_embedding_lookup(torch.as_tensor(item_indices, device=self.dev)).squeeze()
-            item_embs = self.fuse_id_text_embeddings(item_embs, text_embs)
+            text_lookup = self.get_text_embedding_lookup(torch.as_tensor(item_indices, device=self.dev))
+            text_embs = text_lookup.squeeze() if text_lookup.dim() != item_embs.dim() else text_lookup
+            item_ctx = final_feat
+            if item_embs.dim() == 3:
+                item_ctx = final_feat.unsqueeze(1).expand_as(item_embs)
+            elif item_embs.dim() == 2:
+                if final_feat.dim() == 2 and final_feat.size(0) == item_embs.size(0):
+                    item_ctx = final_feat
+                else:
+                    pooled = final_feat.mean(dim=0, keepdim=True)
+                    item_ctx = pooled.expand(item_embs.size(0), -1)
+            item_embs = self.fuse_id_text_embeddings(item_embs, text_embs, context=item_ctx)
         return item_embs.matmul(final_feat.unsqueeze(-1)).squeeze(-1)
 
     def predict_batch(self, user_ids, log_seqs, log_seqs2, item_indices, mask):
@@ -326,7 +350,10 @@ class SASRec(torch.nn.Module):
         item_embs = self.item_emb(torch.as_tensor(item_indices, dtype=torch.long, device=self.dev))
         if self.use_text_features:
             text_embs = self.get_text_embedding_lookup(torch.as_tensor(item_indices, device=self.dev))
-            item_embs = self.fuse_id_text_embeddings(item_embs, text_embs)
+            item_ctx = final_feat.unsqueeze(1)
+            if item_ctx.shape != item_embs.shape:
+                item_ctx = item_ctx.expand_as(item_embs)
+            item_embs = self.fuse_id_text_embeddings(item_embs, text_embs, context=item_ctx)
         return (item_embs * final_feat.unsqueeze(1)).sum(dim=-1)
 
 
