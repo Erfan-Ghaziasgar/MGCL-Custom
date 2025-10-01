@@ -180,8 +180,10 @@ class SASRec(torch.nn.Module):
         log_seqs2_t = torch.as_tensor(log_seqs2, dtype=torch.long, device=self.dev)
 
         # LightGCN embeddings (cache if isTrain=False)
-        _, gcn_hidden1 = self.GCN.get_embedding(user_ids_t, log_seqs1_t, isTrain)
-        _, gcn_hidden2 = self.GCN.get_embedding(user_ids_t, log_seqs2_t, isTrain)
+        refresh_cache = bool(isTrain)
+        _, gcn_hidden1 = self.GCN.get_embedding(user_ids_t, log_seqs1_t, refresh_cache)
+        second_is_train = False if refresh_cache else bool(isTrain)
+        _, gcn_hidden2 = self.GCN.get_embedding(user_ids_t, log_seqs2_t, second_is_train)
 
         # GNN over session graphs (domain 1)
         alias_inputs, A, items = get_slice(log_seqs1)
@@ -421,7 +423,17 @@ class LightGCN(torch.nn.Module):
         self.user_embedding, self.item_embedding = user_emb, item_emb
         self.data_list = data_list
         self.A_adj_matrix = self._get_a_adj_matrix()
-        self.user_all_embedding, self.item_all_embedding = self.forward()
+
+        # Gradient-carrying tensors from the most recent forward() call.
+        self.user_all_embedding = None
+        self.item_all_embedding = None
+
+        # Detached cache for reuse when gradients are disabled (e.g., eval).
+        self._cached_user_embedding = None
+        self._cached_item_embedding = None
+
+        # Populate the caches once so inference can proceed immediately.
+        self._refresh_embedding_cache()
 
     def _get_a_adj_matrix(self):
         rows, cols = [], []
@@ -456,7 +468,25 @@ class LightGCN(torch.nn.Module):
         return torch.split(out, [self.user_count, self.item_count])
 
     def get_embedding(self, user_ids, log_seqs, isTrain):
-        user_emb, item_emb = self.user_all_embedding, self.item_all_embedding
         if isTrain:
-            user_emb, item_emb = self.forward()
+            user_emb, item_emb = self._refresh_embedding_cache()
+        else:
+            # If no gradient path is needed, prefer the detached cache.
+            if not torch.is_grad_enabled():
+                if self._cached_user_embedding is None or self._cached_item_embedding is None:
+                    self._refresh_embedding_cache()
+                user_emb, item_emb = self._cached_user_embedding, self._cached_item_embedding
+            else:
+                if self.user_all_embedding is None or self.item_all_embedding is None:
+                    user_emb, item_emb = self._refresh_embedding_cache()
+                else:
+                    user_emb, item_emb = self.user_all_embedding, self.item_all_embedding
+
         return user_emb[user_ids], item_emb[log_seqs]
+
+    def _refresh_embedding_cache(self):
+        user_emb, item_emb = self.forward()
+        self.user_all_embedding, self.item_all_embedding = user_emb, item_emb
+        self._cached_user_embedding = user_emb.detach()
+        self._cached_item_embedding = item_emb.detach()
+        return user_emb, item_emb
