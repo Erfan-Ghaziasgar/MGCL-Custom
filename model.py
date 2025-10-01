@@ -186,7 +186,11 @@ class SASRec(torch.nn.Module):
         _, gcn_hidden2 = self.GCN.get_embedding(user_ids_t, log_seqs2_t, second_is_train)
 
         # GNN over session graphs (domain 1)
-        alias_inputs, A, items = get_slice(log_seqs1)
+        seq_width1 = log_seqs1.shape[1] if hasattr(log_seqs1, "shape") and len(log_seqs1.shape) > 1 else (
+            len(log_seqs1[0]) if len(log_seqs1) > 0 else 0
+        )
+        max_nodes1 = getattr(self.args, "maxlen", None) or seq_width1
+        alias_inputs, A, items = get_slice(log_seqs1, max_n_node=max_nodes1)
         A_t = torch.from_numpy(A).to(self.dev)              # (B, 2N, N)
         items_t = torch.from_numpy(items).to(self.dev)      # (B, N)
         gnn_nodes = self.gnn(A_t, self.item_emb(items_t))   # (B, N, H)
@@ -210,7 +214,11 @@ class SASRec(torch.nn.Module):
         seqs1 = seqs1 * (~timeline_mask1).unsqueeze(-1)
 
         # GNN (domain 2)
-        alias_inputs2, A2, items2 = get_slice(log_seqs2)
+        seq_width2 = log_seqs2.shape[1] if hasattr(log_seqs2, "shape") and len(log_seqs2.shape) > 1 else (
+            len(log_seqs2[0]) if len(log_seqs2) > 0 else 0
+        )
+        max_nodes2 = getattr(self.args, "maxlen", None) or seq_width2
+        alias_inputs2, A2, items2 = get_slice(log_seqs2, max_n_node=max_nodes2)
         A2_t = torch.from_numpy(A2).to(self.dev)
         items2_t = torch.from_numpy(items2).to(self.dev)
         gnn_nodes2 = self.gnn2(A2_t, self.item_emb(items2_t))
