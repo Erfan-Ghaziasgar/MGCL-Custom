@@ -143,10 +143,6 @@ def train_epoch(model, sampler, optimizer, bce_criterion, num_batch, args, pbar)
     """
     model.train()
 
-    # Precompute LightGCN embeddings once per epoch; reuse via isTrain=False
-    with torch.no_grad():
-        model.GCN.user_all_embedding, model.GCN.item_all_embedding = model.GCN.forward()
-
     epoch_loss = epoch_bpr = epoch_con = epoch_sem = 0.0
 
     for b in range(num_batch):
