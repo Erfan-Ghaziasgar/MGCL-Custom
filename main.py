@@ -3,10 +3,14 @@
 
 import os
 import time
-import torch
 import argparse
 import random
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional, Tuple
+
 import numpy as np
+import torch
 from tqdm.auto import tqdm
 
 from model import SASRec
@@ -36,10 +40,6 @@ def setup_seed(seed: int) -> None:
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     os.environ["PYTHONHASHSEED"] = str(seed)
-
-
-def ckpt_path(ckpt_dir: str, name: str) -> str:
-    return os.path.join(ckpt_dir, name)
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -80,14 +80,42 @@ def get_parser() -> argparse.ArgumentParser:
     return p
 
 
-def save_checkpoint(args, ckpt_dir, epoch, model, optimizer, best_ndcg, best_hr, total_time, tag="last"):
+@dataclass
+class TrainingState:
+    """Minimal mutable container for tracking progress."""
+
+    epoch: int = 1
+    best_ndcg: float = -1.0
+    best_hr: float = -1.0
+    elapsed: float = 0.0
+
+    def register_epoch(self, epoch: int, duration: float) -> None:
+        self.epoch = epoch
+        self.elapsed += float(duration)
+
+    def maybe_update_best(self, ndcg: float, hr: float) -> bool:
+        improved = ndcg > self.best_ndcg
+        if improved:
+            self.best_ndcg = float(ndcg)
+            self.best_hr = float(hr)
+        return improved
+
+
+def save_checkpoint(
+    args,
+    ckpt_dir: Path,
+    state: TrainingState,
+    model,
+    optimizer,
+    tag: str = "last",
+) -> None:
     payload = {
-        "epoch": int(epoch),
+        "epoch": int(state.epoch),
         "model_state": model.state_dict(),
         "optimizer_state": optimizer.state_dict(),
-        "best_ndcg": float(best_ndcg),
-        "best_hr": float(best_hr),
-        "total_time": float(total_time),
+        "best_ndcg": float(state.best_ndcg),
+        "best_hr": float(state.best_hr),
+        "total_time": float(state.elapsed),
         "args": vars(args),
         "rng_state": {
             "torch": torch.get_rng_state(),
@@ -96,31 +124,37 @@ def save_checkpoint(args, ckpt_dir, epoch, model, optimizer, best_ndcg, best_hr,
             "python": random.getstate(),
         },
     }
-    path = ckpt_path(ckpt_dir, f"{tag}.ckpt")
-    torch.save(payload, path)
+    path = ckpt_dir / f"{tag}.ckpt"
+    torch.save(payload, str(path))
 
 
-def try_load_checkpoint(args, model, optimizer, path):
-    """
-    Return: (epoch_start_idx, best_ndcg, best_hr, total_time, loaded)
-    """
-    if not path or not os.path.isfile(path):
-        return 1, -1.0, -1.0, 0.0, False
+def try_load_checkpoint(
+    args,
+    model,
+    optimizer,
+    path: Optional[Path],
+) -> Tuple[int, TrainingState, bool]:
+    """Attempt to load a checkpoint, returning the next epoch and state."""
+
+    if not path or not path.is_file():
+        return 1, TrainingState(), False
     try:
         # PyTorch 2.6 defaults to weights_only=True; we need full state (safe if you trust the file).
-        state = torch.load(path, map_location=torch.device(args.device), weights_only=False)
+        payload = torch.load(str(path), map_location=torch.device(args.device), weights_only=False)
 
-        model.load_state_dict(state["model_state"])
-        if optimizer is not None and "optimizer_state" in state:
-            optimizer.load_state_dict(state["optimizer_state"])
+        model.load_state_dict(payload["model_state"])
+        if optimizer is not None and "optimizer_state" in payload:
+            optimizer.load_state_dict(payload["optimizer_state"])
 
-        epoch = int(state.get("epoch", 0)) + 1
-        best_ndcg = float(state.get("best_ndcg", -1.0))
-        best_hr = float(state.get("best_hr", -1.0))
-        total_time = float(state.get("total_time", 0.0))
+        state = TrainingState(
+            epoch=int(payload.get("epoch", 0)) + 1,
+            best_ndcg=float(payload.get("best_ndcg", -1.0)),
+            best_hr=float(payload.get("best_hr", -1.0)),
+            elapsed=float(payload.get("total_time", 0.0)),
+        )
 
         # Restore RNG (optional but nice for reproducibility)
-        rng = state.get("rng_state", {})
+        rng = payload.get("rng_state", {})
         if "torch" in rng:
             torch.set_rng_state(rng["torch"])
         if "cuda" in rng and rng["cuda"] is not None and torch.cuda.is_available():
@@ -130,10 +164,10 @@ def try_load_checkpoint(args, model, optimizer, path):
         if "python" in rng:
             random.setstate(rng["python"])
 
-        return epoch, best_ndcg, best_hr, total_time, True
+        return state.epoch, state, True
     except Exception:
         # Fall back to fresh start if anything goes wrong
-        return 1, -1.0, -1.0, 0.0, False
+        return 1, TrainingState(), False
 
 
 def train_epoch(model, sampler, optimizer, bce_criterion, num_batch, args, pbar):
@@ -193,147 +227,243 @@ def train_epoch(model, sampler, optimizer, bce_criterion, num_batch, args, pbar)
     }
 
 
-def main():
-    setup_seed(2020)
-    parser = get_parser()
-    args = parser.parse_args()
+def prepare_run_directories(args) -> Tuple[Path, Path]:
+    run_dir = Path(f"{args.target_domain}_{args.train_dir}")
+    ckpt_dir = Path(args.ckpt_dir) if args.ckpt_dir else run_dir / "checkpoints"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir, ckpt_dir
 
-    # Paths
-    run_dir = f"{args.target_domain}_{args.train_dir}"
-    os.makedirs(run_dir, exist_ok=True)
-    ckpt_dir = args.ckpt_dir or os.path.join(run_dir, "checkpoints")
-    os.makedirs(ckpt_dir, exist_ok=True)
 
-    # Persist args (quietly)
-    with open(os.path.join(run_dir, "args.txt"), "w") as f:
-        f.write("\n".join([f"{k},{v}" for k, v in sorted(vars(args).items())]))
+def persist_run_configuration(args, run_dir: Path) -> None:
+    args_txt = "\n".join(f"{k},{v}" for k, v in sorted(vars(args).items()))
+    (run_dir / "args.txt").write_text(args_txt)
 
-    # ----------------------------
-    # Load data
-    # ----------------------------
+
+def load_dataset(args):
     print("Loading data...", flush=True)
-    dataset = data_partition(args.target_domain, args.source_domain)
+    return data_partition(args.target_domain, args.source_domain)
+
+
+def build_sampler(dataset, args) -> WarpSampler:
     (
-        user_train1, user_valid1, user_test1, usernum, itemnum1, user_neg1,
-        user_train2, user_valid2, user_test2, itemnum2,
-        time1, time2, item_text_embeddings, item_id_to_idx, reindexed_to_original
+        user_train1,
+        _user_valid1,
+        _user_test1,
+        usernum,
+        itemnum1,
+        _user_neg1,
+        user_train2,
+        _user_valid2,
+        _user_test2,
+        _itemnum2,
+        time1,
+        time2,
+        *_,
     ) = dataset
 
-    num_batch = max(1, len(user_train1) // args.batch_size)
-
-    # ----------------------------
-    # Model & Sampler
-    # ----------------------------
-    sampler = WarpSampler(
-        user_train1, user_train2, time1, time2, usernum, itemnum1,
-        batch_size=args.batch_size, maxlen=args.maxlen, n_workers=args.num_workers
+    return WarpSampler(
+        user_train1,
+        user_train2,
+        time1,
+        time2,
+        usernum,
+        itemnum1,
+        batch_size=args.batch_size,
+        maxlen=args.maxlen,
+        n_workers=args.num_workers,
     )
 
+
+def build_model(dataset, args) -> SASRec:
+    (
+        user_train1,
+        _user_valid1,
+        _user_test1,
+        usernum,
+        itemnum1,
+        _user_neg1,
+        user_train2,
+        _user_valid2,
+        _user_test2,
+        itemnum2,
+        _time1,
+        _time2,
+        item_text_embeddings,
+        item_id_to_idx,
+        reindexed_to_original,
+    ) = dataset
+
     model = SASRec(
-        user_train1, user_train2, usernum, itemnum1 + itemnum2,
-        item_text_embeddings, item_id_to_idx, reindexed_to_original, args
+        user_train1,
+        user_train2,
+        usernum,
+        itemnum1 + itemnum2,
+        item_text_embeddings,
+        item_id_to_idx,
+        reindexed_to_original,
+        args,
     ).to(args.device)
 
-    # Xavier for trainable matrices (skip text table)
-    for name, p in model.named_parameters():
-        if p.dim() > 1 and p.requires_grad:
-            torch.nn.init.xavier_normal_(p.data)
+    for _, parameter in model.named_parameters():
+        if parameter.dim() > 1 and parameter.requires_grad:
+            torch.nn.init.xavier_normal_(parameter.data)
 
-    bce_criterion = torch.nn.BCEWithLogitsLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.98))
+    return model
 
-    # ----------------------------
-    # Resume if requested
-    # ----------------------------
-    epoch_start_idx, best_ndcg, best_hr, T = 1, -1.0, -1.0, 0.0
-    if args.resume:
-        load_path = args.state_dict_path if (args.state_dict_path and os.path.isfile(args.state_dict_path)) \
-                    else ckpt_path(ckpt_dir, "last.ckpt")
-        epoch_start_idx, best_ndcg, best_hr, T, loaded = try_load_checkpoint(args, model, optimizer, load_path)
-        if loaded:
-            print(f"Resumed from '{load_path}' @ epoch {epoch_start_idx} "
-                  f"(best: NDCG@10={best_ndcg:.5f}, HR@10={best_hr:.5f})", flush=True)
-        else:
-            print("No usable checkpoint found — starting fresh.", flush=True)
-    else:
+
+def resume_if_requested(args, model, optimizer, ckpt_dir: Path) -> Tuple[int, TrainingState]:
+    if not args.resume:
         print("Resume disabled — starting fresh.", flush=True)
+        return 1, TrainingState()
 
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Model ready. Trainable params: {trainable_params}", flush=True)
+    load_path = None
+    if args.state_dict_path:
+        candidate = Path(args.state_dict_path)
+        if candidate.is_file():
+            load_path = candidate
+    if load_path is None:
+        load_path = ckpt_dir / "last.ckpt"
 
-    # ----------------------------
-    # Inference-only mode
-    # ----------------------------
-    if args.inference_only:
-        print("Inference only...", flush=True)
-        model.eval()
-        t_test = evaluate(model, dataset, args)
-        print(f"Test: NDCG@10={t_test[0]:.5f}, HR@10={t_test[1]:.5f}", flush=True)
-        sampler.close()
-        return
+    start_epoch, state, loaded = try_load_checkpoint(args, model, optimizer, load_path)
+    if loaded:
+        print(
+            f"Resumed from '{load_path}' @ epoch {start_epoch} "
+            f"(best: NDCG@10={state.best_ndcg:.5f}, HR@10={state.best_hr:.5f})",
+            flush=True,
+        )
+    else:
+        print("No usable checkpoint found — starting fresh.", flush=True)
+    return start_epoch, state
 
-    # ----------------------------
-    # Training loop (single global tqdm)
-    # ----------------------------
+
+def run_inference_only(model, dataset, sampler, args) -> None:
+    print("Inference only...", flush=True)
+    model.eval()
+    t_test = evaluate(model, dataset, args)
+    print(f"Test: NDCG@10={t_test[0]:.5f}, HR@10={t_test[1]:.5f}", flush=True)
+    sampler.close()
+
+
+def compute_num_batches(user_train1, batch_size: int) -> int:
+    user_count = max(1, len(user_train1))
+    return max(1, user_count // max(1, batch_size))
+
+
+def run_training(
+    args,
+    dataset,
+    model,
+    sampler,
+    optimizer,
+    criterion,
+    num_batch: int,
+    start_epoch: int,
+    state: TrainingState,
+    ckpt_dir: Path,
+) -> None:
     print("Training started.", flush=True)
+    last_epoch = start_epoch - 1
+
     try:
         with tqdm(
             total=args.num_epochs * num_batch,
             desc="Training",
-            initial=(epoch_start_idx - 1) * num_batch,
+            initial=(start_epoch - 1) * num_batch,
             dynamic_ncols=True,
             mininterval=0.5,
             smoothing=0.1,
             leave=True,
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
         ) as pbar:
-
-            for epoch in range(epoch_start_idx, args.num_epochs + 1):
+            for epoch in range(start_epoch, args.num_epochs + 1):
+                last_epoch = epoch
                 t0 = time.time()
-                _ = train_epoch(model, sampler, optimizer, bce_criterion, num_batch, args, pbar)
+                train_epoch(model, sampler, optimizer, criterion, num_batch, args, pbar)
                 epoch_time = time.time() - t0
-                T += epoch_time
+                state.register_epoch(epoch, epoch_time)
 
-                # evaluate sparsely
                 should_eval = (epoch % args.save_every == 0) or (epoch == args.num_epochs)
-                if should_eval:
-                    model.eval()
-                    t_valid = evaluate_valid(model, dataset, args)
-                    t_test = evaluate(model, dataset, args)
+                if not should_eval:
+                    continue
+
+                model.eval()
+                t_valid = evaluate_valid(model, dataset, args)
+                t_test = evaluate(model, dataset, args)
+                print(
+                    f"[Epoch {epoch:3d}] "
+                    f"time={epoch_time:.1f}s | "
+                    f"valid NDCG@10={t_valid[0]:.5f}, HR@10={t_valid[1]:.5f} | "
+                    f"test NDCG@10={t_test[0]:.5f}, HR@10={t_test[1]:.5f}",
+                    flush=True,
+                )
+
+                if state.maybe_update_best(t_valid[0], t_valid[1]):
+                    save_checkpoint(args, ckpt_dir, state, model, optimizer, tag="best")
                     print(
-                        f"[Epoch {epoch:3d}] "
-                        f"time={epoch_time:.1f}s | "
-                        f"valid NDCG@10={t_valid[0]:.5f}, HR@10={t_valid[1]:.5f} | "
-                        f"test NDCG@10={t_test[0]:.5f}, HR@10={t_test[1]:.5f}",
-                        flush=True
+                        f"  ↳ new best: NDCG@10={state.best_ndcg:.5f}, HR@10={state.best_hr:.5f}",
+                        flush=True,
                     )
 
-                    improved = False
-                    if t_valid[0] > best_ndcg:
-                        best_ndcg, best_hr = t_valid[0], t_valid[1]
-                        save_checkpoint(args, ckpt_dir, epoch, model, optimizer, best_ndcg, best_hr, T, tag="best")
-                        print(f"  ↳ new best: NDCG@10={best_ndcg:.5f}, HR@10={best_hr:.5f}", flush=True)
-                        improved = True
-
-                    save_checkpoint(args, ckpt_dir, epoch, model, optimizer, best_ndcg, best_hr, T, tag="last")
-                    if not improved:
-                        # keep output tidy; just acknowledge save
-                        print("  ↳ checkpoint saved (last)", flush=True)
-                    model.train()
+                save_checkpoint(args, ckpt_dir, state, model, optimizer, tag="last")
+                print("  ↳ checkpoint saved (last)", flush=True)
+                model.train()
 
     except KeyboardInterrupt:
         print("\nTraining interrupted — saving...", flush=True)
 
     finally:
-        # Always save a last snapshot on exit
-        save_checkpoint(args, ckpt_dir, epoch, model, optimizer, best_ndcg, best_hr, T, tag="last")
+        state.epoch = last_epoch
+        save_checkpoint(args, ckpt_dir, state, model, optimizer, tag="last")
         sampler.close()
 
         print(
-            f"Done. Best valid NDCG@10={best_ndcg:.5f}, HR@10={best_hr:.5f} | "
-            f"Total train time={T/3600:.2f}h | ckpts: {ckpt_dir}",
-            flush=True
+            f"Done. Best valid NDCG@10={state.best_ndcg:.5f}, HR@10={state.best_hr:.5f} | "
+            f"Total train time={state.elapsed/3600:.2f}h | ckpts: {ckpt_dir}",
+            flush=True,
         )
+
+
+def main():
+    setup_seed(2020)
+    parser = get_parser()
+    args = parser.parse_args()
+
+    run_dir, ckpt_dir = prepare_run_directories(args)
+    persist_run_configuration(args, run_dir)
+
+    dataset = load_dataset(args)
+    user_train1 = dataset[0]
+
+    num_batch = compute_num_batches(user_train1, args.batch_size)
+
+    sampler = build_sampler(dataset, args)
+    model = build_model(dataset, args)
+
+    bce_criterion = torch.nn.BCEWithLogitsLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.98))
+
+    start_epoch, state = resume_if_requested(args, model, optimizer, ckpt_dir)
+
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model ready. Trainable params: {trainable_params}", flush=True)
+
+    if args.inference_only:
+        run_inference_only(model, dataset, sampler, args)
+        return
+
+    run_training(
+        args=args,
+        dataset=dataset,
+        model=model,
+        sampler=sampler,
+        optimizer=optimizer,
+        criterion=bce_criterion,
+        num_batch=num_batch,
+        start_epoch=start_epoch,
+        state=state,
+        ckpt_dir=ckpt_dir,
+    )
 
 
 if __name__ == "__main__":

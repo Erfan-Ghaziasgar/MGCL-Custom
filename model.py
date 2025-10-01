@@ -118,6 +118,23 @@ class SASRec(torch.nn.Module):
         self.dropout2 = torch.nn.Dropout(p=args.dropout_rate)
         self.dropout3 = torch.nn.Dropout(p=args.dropout_rate)
 
+        # Summary fusion to encourage richer cross-domain representations
+        fused_hidden = args.hidden_units * 3
+        intermediate_hidden = args.hidden_units * 2
+        self.domain_importance = torch.nn.Sequential(
+            torch.nn.Linear(args.hidden_units * 4, args.hidden_units),
+            torch.nn.GELU(),
+            torch.nn.Linear(args.hidden_units, 2)
+        )
+        self.summary_fuser = torch.nn.Sequential(
+            torch.nn.Linear(fused_hidden, intermediate_hidden),
+            torch.nn.GELU(),
+            torch.nn.Dropout(args.dropout_rate),
+            torch.nn.Linear(intermediate_hidden, args.hidden_units)
+        )
+        self.summary_dropout = torch.nn.Dropout(p=args.dropout_rate)
+        self.output_layernorm = torch.nn.LayerNorm(args.hidden_units, eps=1e-8)
+
         # gating for SSL
         self.gating3 = torch.nn.Linear(2 * args.hidden_units, args.hidden_units)
         self.gating2 = torch.nn.Linear(args.hidden_units, args.hidden_units)
@@ -168,6 +185,16 @@ class SASRec(torch.nn.Module):
         row_idx = self._text_lookup_indices(flat)
         proj_text = self._text_embed_project(row_idx, for_contrastive)  # (N, H)
         return proj_text.view(*item_indices.shape, -1)
+
+    @staticmethod
+    def _masked_mean(seq: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """Compute mean over last dimension with boolean mask where True indicates padding."""
+        if seq.ndim != 3:
+            raise ValueError("Expected seq to have shape (B, L, H)")
+        valid = (~mask).float()
+        denom = valid.sum(dim=1, keepdim=True).clamp(min=1.0)
+        summed = (seq * valid.unsqueeze(-1)).sum(dim=1)
+        return summed / denom
 
     def fuse_id_text_embeddings(self, id_emb, text_emb, context=None):
         if not self.use_text_features:
@@ -290,10 +317,28 @@ class SASRec(torch.nn.Module):
             att_seq2 = self.cross_forward_layers[i](self.cross_forward_layernorms[i]((Q2 + out2).transpose(0, 1)))
             att_seq2 = att_seq2 * (~timeline_mask2).unsqueeze(-1)
 
-        # Final fusion
-        log_feats = self.last_layernorm(
-            self.dropout3(self.gating3(self.last_cross_layernorm(torch.cat((att_seq1, att_seq2), dim=2))))
+        # Final fusion with adaptive cross-domain summarization
+        fused_inputs = torch.cat((att_seq1, att_seq2), dim=2)
+        base_log_feats = self.last_layernorm(
+            self.dropout3(self.gating3(self.last_cross_layernorm(fused_inputs)))
         )
+
+        seq1_last = att_seq1[:, -1, :]
+        seq2_last = att_seq2[:, -1, :]
+        seq1_mean = self._masked_mean(att_seq1, timeline_mask1)
+        seq2_mean = self._masked_mean(att_seq2, timeline_mask2)
+
+        importance_logits = self.domain_importance(torch.cat((seq1_last, seq2_last, seq1_mean, seq2_mean), dim=-1))
+        importance_weights = torch.softmax(importance_logits, dim=-1)
+        mixed_summary = (
+            importance_weights[:, :1] * seq1_last +
+            importance_weights[:, 1:] * seq2_last
+        )
+
+        summary_input = torch.cat((mixed_summary, seq1_mean, seq2_mean), dim=-1)
+        recalibration = self.summary_dropout(self.summary_fuser(summary_input))
+        log_feats = self.output_layernorm(base_log_feats + recalibration.unsqueeze(1))
+
         return log_feats, gcn_hidden1, gnn_hidden, gcn_hidden2, gnn_hidden2, att_seq1, att_seq2
 
     def forward(self, user_ids, log_seqs, log_seqs2, pos_seqs, neg_seqs, mask):
