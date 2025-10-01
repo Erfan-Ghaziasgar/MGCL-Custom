@@ -51,6 +51,38 @@ class SASRec(torch.nn.Module):
             # store as buffer (not a trainable parameter)
             self.register_buffer("item_text_table", item_text_embeddings)  # [N_text, text_dim]
             text_dim = int(item_text_embeddings.shape[1])
+            placeholder_idx = getattr(args, "placeholder_text_index", None)
+            if placeholder_idx is None:
+                placeholder_idx = item_id_to_idx.get(None)
+            if placeholder_idx is None:
+                placeholder_idx = 0
+            self.placeholder_text_index = int(placeholder_idx)
+
+            lookup_size = self.item_num + 1
+            text_row_lookup = torch.full(
+                (lookup_size,),
+                self.placeholder_text_index,
+                dtype=torch.long,
+                device=self.dev,
+            )
+            has_text_lookup = torch.zeros((lookup_size,), dtype=torch.bool, device=self.dev)
+            for reindexed, original in (reindexed_to_original or {}).items():
+                try:
+                    reindexed_int = int(reindexed)
+                except (TypeError, ValueError):
+                    continue
+                if reindexed_int < 0 or reindexed_int >= lookup_size:
+                    continue
+                if original is None:
+                    continue
+                mapped = item_id_to_idx.get(original)
+                if mapped is None:
+                    continue
+                text_row_lookup[reindexed_int] = int(mapped)
+                has_text_lookup[reindexed_int] = True
+
+            self.register_buffer("text_row_lookup", text_row_lookup)
+            self.register_buffer("has_text_lookup", has_text_lookup)
 
             self.text_projection = torch.nn.Sequential(
                 torch.nn.Linear(text_dim, args.hidden_units),
@@ -72,8 +104,11 @@ class SASRec(torch.nn.Module):
             print("Text embeddings initialized successfully. Using fusion mechanism.")
         else:
             self.register_buffer("item_text_table", None)
+            self.register_buffer("text_row_lookup", None)
+            self.register_buffer("has_text_lookup", None)
             self.item_id_to_idx = None
             self.reindexed_to_original = None
+            self.placeholder_text_index = 0
             print("Warning: No text embeddings provided. Running without semantic features.")
 
         # Architectures
@@ -141,13 +176,16 @@ class SASRec(torch.nn.Module):
             merged.setdefault(k, []).extend(v)
         return merged
 
-    def _text_lookup_indices(self, item_indices_flat: torch.Tensor) -> torch.Tensor:
-        """Map reindexed item ids -> original ids -> text table row; default 0 if missing."""
+    def _text_lookup_indices(self, item_indices_flat: torch.Tensor):
+        """Map reindexed item ids -> text table row; return indices and placeholder mask."""
         if not self.use_text_features:
-            return torch.zeros_like(item_indices_flat, dtype=torch.long, device=self.dev)
-        to_orig = [self.reindexed_to_original.get(int(x), None) for x in item_indices_flat.tolist()]
-        to_row = [self.item_id_to_idx.get(orig, 0) if orig is not None else 0 for orig in to_orig]
-        return torch.tensor(to_row, dtype=torch.long, device=self.dev)
+            zeros = torch.zeros_like(item_indices_flat, dtype=torch.long, device=self.dev)
+            placeholder_mask = torch.ones_like(zeros, dtype=torch.bool, device=self.dev)
+            return zeros, placeholder_mask
+
+        row_idx = self.text_row_lookup.index_select(0, item_indices_flat)
+        has_text = self.has_text_lookup.index_select(0, item_indices_flat)
+        return row_idx, ~has_text
 
     def _text_embed_project(self, row_idx: torch.Tensor, for_contrastive: bool):
         # row_idx: (N,)
@@ -156,19 +194,27 @@ class SASRec(torch.nn.Module):
         return proj(text_raw)
 
     def get_text_embedding_lookup(self, item_indices, for_contrastive=False):
-        """Return projected text embeddings aligned to item_indices shape."""
+        """Return projected text embeddings and availability mask aligned to item_indices shape."""
         if not self.use_text_features:
             h = self.item_emb.embedding_dim
-            return torch.zeros(*item_indices.shape, h, device=self.dev)
-        flat = item_indices.flatten()
-        row_idx = self._text_lookup_indices(flat)
-        proj_text = self._text_embed_project(row_idx, for_contrastive)  # (N, H)
-        return proj_text.view(*item_indices.shape, -1)
+            zeros = torch.zeros(*item_indices.shape, h, device=self.dev)
+            has_text = torch.zeros(*item_indices.shape, dtype=torch.bool, device=self.dev)
+            return zeros, has_text
 
-    def fuse_id_text_embeddings(self, id_emb, text_emb):
+        flat = item_indices.flatten()
+        row_idx, placeholder_mask = self._text_lookup_indices(flat)
+        proj_text = self._text_embed_project(row_idx, for_contrastive)  # (N, H)
+        proj_text = proj_text.view(*item_indices.shape, -1)
+        has_text = (~placeholder_mask).view(*item_indices.shape)
+        return proj_text, has_text
+
+    def fuse_id_text_embeddings(self, id_emb, text_emb, has_text):
         if not self.use_text_features:
             return id_emb
         gate = self.fusion_gate(torch.cat([id_emb, text_emb], dim=-1))
+        if has_text is not None:
+            missing_mask = (~has_text).unsqueeze(-1)
+            gate = gate.masked_fill(missing_mask, 1.0)
         return gate * id_emb + (1.0 - gate) * text_emb
 
     # -----------------
@@ -202,8 +248,8 @@ class SASRec(torch.nn.Module):
         seqs1 = self.seq_layernorm1(z[:, :, 0:1] * gcn_hidden1 + z[:, :, 1:2] * gnn_hidden)
 
         if self.use_text_features:
-            text_emb1 = self.get_text_embedding_lookup(log_seqs1_t)
-            seqs1 = self.fuse_id_text_embeddings(seqs1, text_emb1)
+            text_emb1, has_text1 = self.get_text_embedding_lookup(log_seqs1_t)
+            seqs1 = self.fuse_id_text_embeddings(seqs1, text_emb1, has_text1)
 
         # position + dropout + mask
         H = self.item_emb.embedding_dim
@@ -230,8 +276,8 @@ class SASRec(torch.nn.Module):
         seqs2 = self.seq_layernorm2(zz[:, :, 0:1] * gcn_hidden2 + zz[:, :, 1:2] * gnn_hidden2)
 
         if self.use_text_features:
-            text_emb2 = self.get_text_embedding_lookup(log_seqs2_t)
-            seqs2 = self.fuse_id_text_embeddings(seqs2, text_emb2)
+            text_emb2, has_text2 = self.get_text_embedding_lookup(log_seqs2_t)
+            seqs2 = self.fuse_id_text_embeddings(seqs2, text_emb2, has_text2)
 
         seqs2 = seqs2 * (H ** 0.5)
         seqs2 = self.emb_dropout(seqs2 + self.pos_emb(positions))
@@ -288,10 +334,10 @@ class SASRec(torch.nn.Module):
         pos_embs = self.item_emb(torch.as_tensor(pos_seqs, dtype=torch.long, device=self.dev))
         neg_embs = self.item_emb(torch.as_tensor(neg_seqs, dtype=torch.long, device=self.dev))
         if self.use_text_features:
-            pos_text = self.get_text_embedding_lookup(torch.as_tensor(pos_seqs, device=self.dev))
-            neg_text = self.get_text_embedding_lookup(torch.as_tensor(neg_seqs, device=self.dev))
-            pos_embs = self.fuse_id_text_embeddings(pos_embs, pos_text)
-            neg_embs = self.fuse_id_text_embeddings(neg_embs, neg_text)
+            pos_text, has_pos_text = self.get_text_embedding_lookup(torch.as_tensor(pos_seqs, device=self.dev))
+            neg_text, has_neg_text = self.get_text_embedding_lookup(torch.as_tensor(neg_seqs, device=self.dev))
+            pos_embs = self.fuse_id_text_embeddings(pos_embs, pos_text, has_pos_text)
+            neg_embs = self.fuse_id_text_embeddings(neg_embs, neg_text, has_neg_text)
 
         pos_logits = (log_feats * pos_embs).sum(dim=-1)
         neg_logits = (log_feats * neg_embs).sum(dim=-1)
@@ -303,8 +349,8 @@ class SASRec(torch.nn.Module):
 
         semantic_con_loss = torch.tensor(0.0, device=self.dev)
         if self.use_text_features:
-            t1 = self.get_text_embedding_lookup(torch.as_tensor(log_seqs, device=self.dev), for_contrastive=True)
-            t2 = self.get_text_embedding_lookup(torch.as_tensor(log_seqs2, device=self.dev), for_contrastive=True)
+            t1, _ = self.get_text_embedding_lookup(torch.as_tensor(log_seqs, device=self.dev), for_contrastive=True)
+            t2, _ = self.get_text_embedding_lookup(torch.as_tensor(log_seqs2, device=self.dev), for_contrastive=True)
             semantic_con_loss = SSL_semantic(gnn1, t1, temp=self.args.temp) + \
                                 SSL_semantic(gnn2, t2, temp=self.args.temp)
 
@@ -316,8 +362,8 @@ class SASRec(torch.nn.Module):
         final_feat = log_feats[:, -1, :]
         item_embs = self.item_emb(torch.as_tensor(item_indices, dtype=torch.long, device=self.dev))
         if self.use_text_features:
-            text_embs = self.get_text_embedding_lookup(torch.as_tensor(item_indices, device=self.dev)).squeeze()
-            item_embs = self.fuse_id_text_embeddings(item_embs, text_embs)
+            text_embs, has_text = self.get_text_embedding_lookup(torch.as_tensor(item_indices, device=self.dev))
+            item_embs = self.fuse_id_text_embeddings(item_embs, text_embs, has_text)
         return item_embs.matmul(final_feat.unsqueeze(-1)).squeeze(-1)
 
     def predict_batch(self, user_ids, log_seqs, log_seqs2, item_indices, mask):
@@ -325,8 +371,8 @@ class SASRec(torch.nn.Module):
         final_feat = log_feats[:, -1, :]
         item_embs = self.item_emb(torch.as_tensor(item_indices, dtype=torch.long, device=self.dev))
         if self.use_text_features:
-            text_embs = self.get_text_embedding_lookup(torch.as_tensor(item_indices, device=self.dev))
-            item_embs = self.fuse_id_text_embeddings(item_embs, text_embs)
+            text_embs, has_text = self.get_text_embedding_lookup(torch.as_tensor(item_indices, device=self.dev))
+            item_embs = self.fuse_id_text_embeddings(item_embs, text_embs, has_text)
         return (item_embs * final_feat.unsqueeze(1)).sum(dim=-1)
 
 
