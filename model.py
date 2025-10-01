@@ -51,6 +51,12 @@ class SASRec(torch.nn.Module):
             # store as buffer (not a trainable parameter)
             self.register_buffer("item_text_table", item_text_embeddings)  # [N_text, text_dim]
             text_dim = int(item_text_embeddings.shape[1])
+            placeholder_idx = getattr(args, "placeholder_text_index", None)
+            if placeholder_idx is None:
+                placeholder_idx = item_id_to_idx.get(None)
+            if placeholder_idx is None:
+                placeholder_idx = 0
+            self.placeholder_text_index = int(placeholder_idx)
 
             self.text_projection = torch.nn.Sequential(
                 torch.nn.Linear(text_dim, args.hidden_units),
@@ -74,6 +80,7 @@ class SASRec(torch.nn.Module):
             self.register_buffer("item_text_table", None)
             self.item_id_to_idx = None
             self.reindexed_to_original = None
+            self.placeholder_text_index = 0
             print("Warning: No text embeddings provided. Running without semantic features.")
 
         # Architectures
@@ -149,9 +156,24 @@ class SASRec(torch.nn.Module):
             return zeros, placeholder_mask
 
         to_orig = [self.reindexed_to_original.get(int(x), None) for x in item_indices_flat.tolist()]
-        to_row = [self.item_id_to_idx.get(orig, 0) if orig is not None else 0 for orig in to_orig]
-        row_idx = torch.tensor(to_row, dtype=torch.long, device=self.dev)
-        placeholder_mask = row_idx == 0
+        row_idx_list = []
+        placeholder_flags = []
+        for orig in to_orig:
+            if orig is None:
+                row_idx_list.append(self.placeholder_text_index)
+                placeholder_flags.append(True)
+                continue
+
+            mapped = self.item_id_to_idx.get(orig)
+            if mapped is None:
+                row_idx_list.append(self.placeholder_text_index)
+                placeholder_flags.append(True)
+            else:
+                row_idx_list.append(mapped)
+                placeholder_flags.append(False)
+
+        row_idx = torch.tensor(row_idx_list, dtype=torch.long, device=self.dev)
+        placeholder_mask = torch.tensor(placeholder_flags, dtype=torch.bool, device=self.dev)
         return row_idx, placeholder_mask
 
     def _text_embed_project(self, row_idx: torch.Tensor, for_contrastive: bool):
