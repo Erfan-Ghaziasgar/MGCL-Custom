@@ -336,7 +336,7 @@ def evaluate_valid(model, dataset, args):
 # ============================================================
 # Graph inputs for GNN (fast version)
 # ============================================================
-def get_slice(inputs):
+def get_slice(inputs, max_n_node=None):
     """
     Build per-session graph slices for HeteroGNN-like step.
     Returns numpy arrays for speed:
@@ -344,9 +344,11 @@ def get_slice(inputs):
       A:            (B, 2*max_n_node, max_n_node)   2 blocks: in/out
       items:        (B, max_n_node)
     """
-    max_n_node = 100
     B = len(inputs)
     L = len(inputs[0]) if B > 0 else 0
+
+    if max_n_node is None:
+        max_n_node = L
 
     alias_inputs = np.zeros((B, L), dtype=np.int64)
     A = np.zeros((B, 2 * max_n_node, max_n_node), dtype=np.float32)
